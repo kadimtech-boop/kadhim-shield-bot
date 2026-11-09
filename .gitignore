@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.venv/
+env/
+venv/
+saved_bot_token.txt

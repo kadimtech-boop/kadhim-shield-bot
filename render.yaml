@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: kadhim-cyber-shield-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: 8978592122:AAHgCsvC5opgX-61suoA7e6Tck6GFeNHbto
+      - key: PORT
+        value: 10000
+
