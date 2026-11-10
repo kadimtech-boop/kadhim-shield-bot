@@ -695,7 +695,7 @@ async def web_debug_bypass(request):
         import traceback
         log(traceback.format_exc())
 
-    return web.Response(text="\n\n".join(logs), content_type="text/plain; charset=utf-8")
+    return web.Response(text="\n\n".join(logs), content_type="text/plain", charset="utf-8")
 
 async def start_web_server():
     """تشغيل خادم الويب ليجتاز الفحص السحابي لـ Render و Koyeb و UptimeRobot"""
