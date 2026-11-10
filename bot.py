@@ -293,12 +293,20 @@ class AsyncBypassEngine:
 
     @classmethod
     def get_stealth_session(cls):
+        proxies = None
+        proxy_env = os.environ.get("PROXY_URL", "").strip()
+        if proxy_env:
+            proxies = {"http": proxy_env, "https": proxy_env}
+
         try:
             from curl_cffi import requests as cffi_requests
-            return cffi_requests.Session(impersonate="chrome124")
+            return cffi_requests.Session(impersonate="chrome124", proxies=proxies)
         except Exception:
             import cloudscraper
-            return cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+            s = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+            if proxies:
+                s.proxies = proxies
+            return s
 
     @classmethod
     def sync_single_hop(cls, url: str, session):
