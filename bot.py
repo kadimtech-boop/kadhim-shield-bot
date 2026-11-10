@@ -19,6 +19,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQuery,
@@ -120,6 +121,11 @@ class AsyncDatabase:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR IGNORE INTO users VALUES (?, date('now'))", (user_id,))
             await db.commit()
+
+    async def get_all_users(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT user_id FROM users") as cur:
+                return [row[0] async for row in cur]
 
     async def get_cached(self, short_url: str):
         async with aiosqlite.connect(self.db_path) as db:
@@ -286,7 +292,16 @@ class AsyncBypassEngine:
         return None
 
     @classmethod
-    def sync_single_hop(cls, url: str, scraper):
+    def get_stealth_session(cls):
+        try:
+            from curl_cffi import requests as cffi_requests
+            return cffi_requests.Session(impersonate="chrome124")
+        except Exception:
+            import cloudscraper
+            return cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+
+    @classmethod
+    def sync_single_hop(cls, url: str, session):
         parsed_orig = urlparse(url)
         base_domain = f"{parsed_orig.scheme}://{parsed_orig.netloc}"
 
@@ -296,8 +311,8 @@ class AsyncBypassEngine:
             "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
         }
 
-        r1 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
-        current_url = r1.url
+        r1 = session.get(url, headers=headers, allow_redirects=True, timeout=20)
+        current_url = str(r1.url)
         html = r1.text
 
         # كشف المدونة الوسيطة (AdLinkFly Intermediary Blog مثل primepropertynow.com)
@@ -306,9 +321,9 @@ class AsyncBypassEngine:
                 inter_blog = urlparse(current_url).netloc
                 inter_origin = f"{urlparse(current_url).scheme}://{inter_blog}/"
                 headers["Referer"] = inter_origin
-                r1 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
+                r1 = session.get(url, headers=headers, allow_redirects=True, timeout=20)
                 html = r1.text
-                current_url = r1.url
+                current_url = str(r1.url)
             else:
                 return current_url
 
@@ -316,7 +331,7 @@ class AsyncBypassEngine:
         go_form = soup.find("form", {"id": "go-link"})
         if not go_form:
             headers["Referer"] = base_domain + "/"
-            r2 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
+            r2 = session.get(url, headers=headers, allow_redirects=True, timeout=20)
             if "go-link" in r2.text:
                 html = r2.text
                 soup = BeautifulSoup(html, "html.parser")
@@ -329,15 +344,14 @@ class AsyncBypassEngine:
 
             time.sleep(6)
 
-            ajax_headers = headers.copy()
-            ajax_headers.update({
+            ajax_headers = {
                 "X-Requested-With": "XMLHttpRequest",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Origin": base_domain,
                 "Referer": current_url
-            })
-            res = scraper.post(post_url, data=payload, headers=ajax_headers, timeout=20)
+            }
+            res = session.post(post_url, data=payload, headers=ajax_headers, timeout=20)
             try:
                 js = res.json()
                 if js.get("url"):
@@ -353,13 +367,13 @@ class AsyncBypassEngine:
 
     @classmethod
     def sync_resolve_deep(cls, initial_url: str, max_hops: int = 4):
-        scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+        session = cls.get_stealth_session()
         current_target = initial_url
         hops = 0
 
         for hop in range(1, max_hops + 1):
             hops = hop
-            next_url = cls.sync_single_hop(current_target, scraper)
+            next_url = cls.sync_single_hop(current_target, session)
             if not next_url or next_url == current_target:
                 break
             current_target = next_url
@@ -391,10 +405,12 @@ class AsyncBypassEngine:
             }
 
         # تشغيل التفكيك العميق في خيط منفصل لتفادي تجميد حلقة الأحداث وبدون الحظر من Cloudflare
+        debug_err = None
         try:
             current_target, hops = await asyncio.to_thread(cls.sync_resolve_deep, initial_url, max_hops)
         except Exception as e:
             logger.error(f"Error during deep bypass: {e}")
+            debug_err = str(e)
             current_target, hops = None, 0
 
         if current_target and current_target != initial_url:
@@ -410,9 +426,13 @@ class AsyncBypassEngine:
                 "elapsed": f"{elapsed} ثانية"
             }
 
+        err_msg = "تعذر كسر الرابط تلقائياً (قد يتطلب حل Captcha صورية معقدة أو أن الرابط غير صالح)."
+        if debug_err:
+            err_msg += f"\nالتفاصيل: `{debug_err}`"
+
         return {
             "status": "error",
-            "message": "تعذر كسر الرابط تلقائياً (قد يتطلب حل Captcha صورية معقدة أو أن الرابط غير صالح)."
+            "message": err_msg
         }
 
 # =====================================================================
