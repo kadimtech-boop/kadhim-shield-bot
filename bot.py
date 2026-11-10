@@ -499,6 +499,38 @@ async def cb_stats(call):
     )
     await call.answer(alert_text, show_alert=True)
 
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: Message):
+    if ADMIN_ID and message.from_user.id != ADMIN_ID:
+        return
+    text_to_send = message.text.replace("/broadcast", "", 1).strip()
+    if not text_to_send:
+        await message.reply("⚠️ استخدم الأمر هكذا:\n`/broadcast رسالتك هنا`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    users = await db.get_all_users()
+    sent_count = 0
+    for uid in users:
+        try:
+            await bot.send_message(uid, text_to_send, parse_mode=ParseMode.MARKDOWN)
+            sent_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    await message.reply(f"📢 **تم إرسال الإذاعة إلى ({sent_count}/{len(users)}) مستخدم بنجاح!**", parse_mode=ParseMode.MARKDOWN)
+
+@dp.message(Command("backup"))
+async def cmd_backup(message: Message):
+    if ADMIN_ID and message.from_user.id != ADMIN_ID:
+        return
+    if os.path.exists(DB_FILE):
+        await message.reply_document(
+            document=FSInputFile(DB_FILE),
+            caption=f"💾 **نسخة احتياطية لقاعدة بيانات {DEV_NAME} Cyber Shield**"
+        )
+    else:
+        await message.reply("⚠️ ملف قاعدة البيانات غير موجود بعد.")
+
 @dp.message(F.text | F.caption)
 async def handle_incoming_links(message: Message):
     user_id = message.from_user.id
@@ -531,9 +563,11 @@ async def handle_incoming_links(message: Message):
     clean_buttons = []
 
     async with aiohttp.ClientSession() as session:
-        for idx, target in enumerate(urls, 1):
+        tasks = [AsyncBypassEngine.resolve_deep(target, session) for target in urls]
+        results = await asyncio.gather(*tasks)
+
+        for idx, (target, res) in enumerate(zip(urls, results), 1):
             prefix = f"🔹 **[رابط {idx}/{len(urls)}]** " if len(urls) > 1 else ""
-            res = await AsyncBypassEngine.resolve_deep(target, session)
             if res["status"] == "success":
                 clean_buttons.append(res["url"])
                 reports.append(
