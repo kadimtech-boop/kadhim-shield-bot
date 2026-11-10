@@ -13,6 +13,7 @@ import aiohttp
 from aiohttp import web
 import aiosqlite
 from bs4 import BeautifulSoup
+import cloudscraper
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -36,6 +37,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8978592122:AAHgCsvC5opgX-61suoA7e6Tck6G
 PORT = int(os.environ.get("PORT", 8080))
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cyber_shield_v7.db")
 
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 DEV_NAME = "Kadhim Zeyad"
 DEV_INSTA = "https://www.instagram.com/_.vrr?psln=amM5NmZmNDN3YjEy"
 BOT_USERNAME = "KadhimlinkBot"
@@ -248,15 +250,9 @@ class AsyncThreatAuditor:
         }
 
 # =====================================================================
-# 5. محرك التفكيك الذكي العميق (Async Deep Bypass Engine)
+# 5. محرك التفكيك الذكي العميق (Cloudscraper + Referer Loopback Engine)
 # =====================================================================
 class AsyncBypassEngine:
-    USER_AGENTS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    ]
-
     KNOWN_SHORTENERS = (
         "linkjust.com", "bit.ly", "tinyurl.com", "cuty.io", "exe.io", "ouo.io",
         "shrtfly.com", "clicksfly.com", "fc.lc", "za.gl", "t.co", "is.gd", "rebrand.ly"
@@ -266,18 +262,6 @@ class AsyncBypassEngine:
     def is_shortener(cls, url: str) -> bool:
         domain = urlparse(url).netloc.lower().replace("www.", "")
         return any(s in domain for s in cls.KNOWN_SHORTENERS)
-
-    @classmethod
-    def get_headers(cls, referer=None):
-        headers = {
-            "User-Agent": cls.USER_AGENTS[0],
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-            "DNT": "1"
-        }
-        if referer:
-            headers["Referer"] = referer
-        return headers
 
     @staticmethod
     def extract_hidden_links(html: str, current_domain: str):
@@ -302,66 +286,87 @@ class AsyncBypassEngine:
         return None
 
     @classmethod
-    async def single_hop_bypass(cls, url: str, session: aiohttp.ClientSession):
-        parsed = urlparse(url)
-        base_domain = f"{parsed.scheme}://{parsed.netloc}"
+    def sync_single_hop(cls, url: str, scraper):
+        parsed_orig = urlparse(url)
+        base_domain = f"{parsed_orig.scheme}://{parsed_orig.netloc}"
 
-        try:
-            async with session.get(
-                url,
-                headers=cls.get_headers(),
-                allow_redirects=False,
-                timeout=aiohttp.ClientTimeout(total=12)
-            ) as resp:
-                # التحويل المباشر 301 / 302
-                if resp.status in (301, 302, 303, 307, 308):
-                    loc = resp.headers.get("Location")
-                    if loc:
-                        target = urljoin(url, loc)
-                        if target != url:
-                            return target
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
+        }
 
-                # قراءة جزء معقول من الصفحة (حد أقصى 1MB)
-                html = (await resp.content.read(1024 * 1024)).decode("utf-8", errors="ignore")
-        except Exception:
-            return None
+        r1 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
+        current_url = r1.url
+        html = r1.text
 
-        # كشف نماذج AdLinkFly go-link
+        # كشف المدونة الوسيطة (AdLinkFly Intermediary Blog مثل primepropertynow.com)
+        if parsed_orig.netloc not in urlparse(current_url).netloc:
+            if "viewarticle=" in current_url.lower() or "wpsafelink" in html.lower() or "linkjust" in html.lower():
+                inter_blog = urlparse(current_url).netloc
+                inter_origin = f"{urlparse(current_url).scheme}://{inter_blog}/"
+                headers["Referer"] = inter_origin
+                r1 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
+                html = r1.text
+                current_url = r1.url
+            else:
+                return current_url
+
         soup = BeautifulSoup(html, "html.parser")
         go_form = soup.find("form", {"id": "go-link"})
+        if not go_form:
+            headers["Referer"] = base_domain + "/"
+            r2 = scraper.get(url, headers=headers, allow_redirects=True, timeout=20)
+            if "go-link" in r2.text:
+                html = r2.text
+                soup = BeautifulSoup(html, "html.parser")
+                go_form = soup.find("form", {"id": "go-link"})
+
         if go_form:
             action = go_form.get("action") or "/links/go"
             post_url = urljoin(base_domain, action)
             payload = {inp.get("name"): inp.get("value", "") for inp in go_form.find_all("input") if inp.get("name")}
 
-            await asyncio.sleep(6)  # انتظار غير متزامن لا يوقف السيرفر
+            time.sleep(6)
 
-            ajax_headers = cls.get_headers(referer=url)
+            ajax_headers = headers.copy()
             ajax_headers.update({
                 "X-Requested-With": "XMLHttpRequest",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                 "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Origin": base_domain
+                "Origin": base_domain,
+                "Referer": current_url
             })
+            res = scraper.post(post_url, data=payload, headers=ajax_headers, timeout=20)
             try:
-                async with session.post(
-                    post_url,
-                    data=payload,
-                    headers=ajax_headers,
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as post_res:
-                    data = await post_res.json(content_type=None)
-                    if data and "url" in data:
-                        return data["url"]
+                js = res.json()
+                if js.get("url"):
+                    return js["url"]
             except Exception:
                 pass
 
-        # استخراج Base64 أو روابط JS
-        hidden = cls.extract_hidden_links(html, parsed.netloc)
-        if hidden:
-            return hidden
+        extracted = cls.extract_hidden_links(html, parsed_orig.netloc)
+        if extracted:
+            return extracted
 
-        return None
+        return current_url if current_url != url else None
+
+    @classmethod
+    def sync_resolve_deep(cls, initial_url: str, max_hops: int = 4):
+        scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
+        current_target = initial_url
+        hops = 0
+
+        for hop in range(1, max_hops + 1):
+            hops = hop
+            next_url = cls.sync_single_hop(current_target, scraper)
+            if not next_url or next_url == current_target:
+                break
+            current_target = next_url
+            if not cls.is_shortener(current_target):
+                break
+
+        return current_target, hops
 
     @classmethod
     async def resolve_deep(cls, initial_url: str, session: aiohttp.ClientSession, max_hops: int = 4):
@@ -385,21 +390,12 @@ class AsyncBypassEngine:
                 "elapsed": f"{elapsed} ثانية"
             }
 
-        current_target = initial_url
-        hops = 0
-
-        for hop in range(1, max_hops + 1):
-            hops = hop
-            if not is_safe_url(current_target):
-                break
-
-            next_url = await cls.single_hop_bypass(current_target, session)
-            if not next_url or next_url == current_target:
-                break
-
-            current_target = next_url
-            if not cls.is_shortener(current_target):
-                break
+        # تشغيل التفكيك العميق في خيط منفصل لتفادي تجميد حلقة الأحداث وبدون الحظر من Cloudflare
+        try:
+            current_target, hops = await asyncio.to_thread(cls.sync_resolve_deep, initial_url, max_hops)
+        except Exception as e:
+            logger.error(f"Error during deep bypass: {e}")
+            current_target, hops = None, 0
 
         if current_target and current_target != initial_url:
             audit = await AsyncThreatAuditor.audit_url(session, current_target)
