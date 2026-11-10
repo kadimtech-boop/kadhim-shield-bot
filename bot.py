@@ -643,11 +643,66 @@ async def web_health_handler(request):
         content_type="text/html"
     )
 
+async def web_debug_bypass(request):
+    test_url = request.query.get("url", "https://linkjust.com/YiS")
+    logs = []
+    def log(msg): logs.append(str(msg))
+
+    try:
+        session = AsyncBypassEngine.get_stealth_session()
+        log(f"Session type: {type(session)}")
+
+        r1 = session.get(test_url, allow_redirects=True, timeout=20)
+        current_url = str(r1.url)
+        log(f"R1: status={r1.status_code}, url={current_url}")
+        log(f"R1 text sample: {r1.text[:300]}")
+
+        parsed_orig = urlparse(test_url)
+        if parsed_orig.netloc not in urlparse(current_url).netloc:
+            inter_blog = urlparse(current_url).netloc
+            inter_origin = f"{urlparse(current_url).scheme}://{inter_blog}/"
+            log(f"Detected inter blog: {inter_blog}")
+            r2 = session.get(test_url, headers={"Referer": inter_origin}, allow_redirects=True, timeout=20)
+            current_url = str(r2.url)
+            log(f"R2 (loopback): status={r2.status_code}, url={current_url}")
+            log(f"R2 text sample: {r2.text[:300]}")
+            soup = BeautifulSoup(r2.text, "html.parser")
+        else:
+            soup = BeautifulSoup(r1.text, "html.parser")
+
+        go_form = soup.find("form", {"id": "go-link"})
+        log(f"Go form present: {bool(go_form)}")
+        if go_form:
+            action = go_form.get("action") or "/links/go"
+            base_domain = f"{parsed_orig.scheme}://{parsed_orig.netloc}"
+            post_url = urljoin(base_domain, action)
+            payload = {inp.get("name"): inp.get("value", "") for inp in go_form.find_all("input") if inp.get("name")}
+            log(f"Inputs: {list(payload.keys())}")
+            log(f"Waiting 6s...")
+            await asyncio.sleep(6)
+            ajax_headers = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Origin": base_domain,
+                "Referer": current_url
+            }
+            res = session.post(post_url, data=payload, headers=ajax_headers, timeout=20)
+            log(f"POST status: {res.status_code}")
+            log(f"POST text: {res.text}")
+    except Exception as e:
+        log(f"EXCEPTION: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+    return web.Response(text="\n\n".join(logs), content_type="text/plain; charset=utf-8")
+
 async def start_web_server():
     """تشغيل خادم الويب ليجتاز الفحص السحابي لـ Render و Koyeb و UptimeRobot"""
     app = web.Application()
     app.router.add_get("/", web_health_handler)
     app.router.add_get("/health", web_health_handler)
+    app.router.add_get("/debug_bypass", web_debug_bypass)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
