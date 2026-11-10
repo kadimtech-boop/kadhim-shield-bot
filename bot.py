@@ -295,12 +295,23 @@ class AsyncBypassEngine:
     def get_stealth_session(cls):
         proxies = None
         proxy_env = os.environ.get("PROXY_URL", "").strip()
-        if proxy_env:
-            proxies = {"http": proxy_env, "https": proxy_env}
+        scraperapi_key = os.environ.get("SCRAPERAPI_KEY", "").strip()
+
+        if scraperapi_key:
+            proxy_endpoint = f"http://scraperapi:{scraperapi_key}@proxy-server.scraperapi.com:8001"
+            proxies = {"http": proxy_endpoint, "https": proxy_endpoint}
+        elif proxy_env:
+            # يدعم بروكسي واحد أو قائمة بروكسيات مفصولة بفواصل
+            if "," in proxy_env:
+                import random
+                chosen = random.choice([p.strip() for p in proxy_env.split(",") if p.strip()])
+                proxies = {"http": chosen, "https": chosen}
+            else:
+                proxies = {"http": proxy_env, "https": proxy_env}
 
         try:
             from curl_cffi import requests as cffi_requests
-            return cffi_requests.Session(impersonate="chrome124", proxies=proxies)
+            return cffi_requests.Session(impersonate="chrome124", proxies=proxies, verify=False if scraperapi_key else True)
         except Exception:
             import cloudscraper
             s = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "desktop": True})
